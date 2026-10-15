@@ -36,6 +36,6 @@ php flarum cache:clear
 
 - [Packagist](https://packagist.org/packages/fof/brevo-mail)
 - [GitHub](https://github.com/FriendsOfFlarum/brevo-mail)
-- [Discuss](https://discuss.flarum.org/d/PUT_DISCUSS_SLUG_HERE)
+- [Discuss](https://discuss.flarum.org/d/40084)
 
 An extension by [FriendsOfFlarum](https://github.com/FriendsOfFlarum).
