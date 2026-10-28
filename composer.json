@@ -22,7 +22,7 @@
         }
     ],
     "require": {
-        "flarum/core": "^2.0",
+        "flarum/core": "^2.1",
         "symfony/brevo-mailer": "^7.4.13 || ^8.0.13"
     },
     "authors": [

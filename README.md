@@ -11,6 +11,12 @@ A [Flarum](https://flarum.org) extension. Send your forum's email through the [B
 3. In your forum's admin panel, open **Email**, choose `brevo` as the driver, paste the API key, and save.
 4. Make sure the **From** address matches a verified sender or authenticated domain, then use **Send Test Mail** to check everything works.
 
+### Bounces and spam complaints
+
+On Flarum 2.1 and later, Brevo can tell your forum when an address hard bounces, is invalid or blocked, or marks your mail as spam. Flarum then flags the member and can stop sending them notification emails. Soft bounces are ignored.
+
+On the **Email** page, click **Register webhook with provider** under Bounce Handling. The extension adds a transactional webhook to your Brevo account, alongside any you already have. Brevo's requests are checked against Brevo's published IP ranges, which Flarum reads from the connection. If your forum is behind a proxy or CDN, your web server must pass the visitor's real IP address to PHP, for example with Apache's `mod_remoteip` or nginx's `real_ip` module. Flarum logs every webhook it refuses, so check the forum's log if bounces don't arrive.
+
 ### Already sending through Brevo over SMTP?
 
 We recommend switching to the API. It sends each email in a single HTTPS request instead of an SMTP conversation, works on hosts that block outgoing SMTP ports, and reports failures with clear error messages.
