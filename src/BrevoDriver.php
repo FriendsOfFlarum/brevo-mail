@@ -16,8 +16,10 @@ use Flarum\Mail\HandlesWebhooks;
 use Flarum\Mail\ProvisionsWebhooks;
 use Flarum\Settings\SettingsRepositoryInterface;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ClientException;
 use Illuminate\Contracts\Validation\Factory;
 use Illuminate\Support\MessageBag;
+use RuntimeException;
 use Symfony\Component\Mailer\Bridge\Brevo\RemoteEvent\BrevoPayloadConverter;
 use Symfony\Component\Mailer\Bridge\Brevo\Transport\BrevoTransportFactory;
 use Symfony\Component\Mailer\Bridge\Brevo\Webhook\BrevoRequestParser;
@@ -28,7 +30,7 @@ use Symfony\Component\Webhook\Client\RequestParserInterface;
 
 class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhooks
 {
-    protected const WEBHOOK_EVENTS = ['hardBounce', 'invalid', 'blocked', 'spam'];
+    protected const WEBHOOK_EVENTS = ['hardBounce', 'invalid', 'spam'];
 
     public function availableSettings(): array
     {
@@ -60,17 +62,24 @@ class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhook
 
     public function getWebhookRequestParser(SettingsRepositoryInterface $settings): RequestParserInterface
     {
-        return new BrevoWebhookParser(new BrevoRequestParser(new BrevoPayloadConverter()));
+        return new BrevoRequestParser(new BrevoPayloadConverter(), allowedIPs: []);
     }
 
     public function getWebhookSigningSecret(SettingsRepositoryInterface $settings): ?string
     {
-        return null;
+        if (! $this->webhookConfigured($settings)) {
+            return null;
+        }
+
+        return $settings->get('mail_webhook_username').':'.$settings->get('mail_webhook_password');
     }
 
     public function webhookConfigured(SettingsRepositoryInterface $settings): bool
     {
-        return true;
+        $username = (string) $settings->get('mail_webhook_username');
+        $password = (string) $settings->get('mail_webhook_password');
+
+        return $username !== '' && $password !== '' && ! str_contains($username, ':');
     }
 
     public function webhooksAvailable(SettingsRepositoryInterface $settings): bool
@@ -80,28 +89,31 @@ class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhook
 
     public function isPermanentFailure(MailerDeliveryEvent $event): bool
     {
-        return in_array($event->getPayload()['event'] ?? null, ['hard_bounce', 'invalid_email', 'blocked'], true);
+        return in_array($event->getPayload()['event'] ?? null, ['hard_bounce', 'invalid_email'], true);
     }
 
     public function registerWebhook(SettingsRepositoryInterface $settings, string $url): void
     {
-        $client = $this->apiClient($settings);
+        if (! $this->webhookConfigured($settings)) {
+            throw new RuntimeException('Configure webhook authentication before registering the webhook.');
+        }
 
-        foreach ($this->webhooksFor($client, $url) as $webhook) {
-            if ($webhook['url'] === $url) {
-                return;
+        $client = $this->apiClient($settings);
+        $webhooks = $this->webhooksFor($client, $url);
+        $configuration = ['url' => $url, 'events' => self::WEBHOOK_EVENTS, 'batched' => false];
+
+        if ($webhooks !== []) {
+            $first = array_shift($webhooks);
+            $client->request('PUT', 'webhooks/'.$first['id'], ['json' => $configuration]);
+            foreach ($webhooks as $webhook) {
+                $this->deleteWebhook($client, $webhook['id']);
             }
 
-            $client->request('DELETE', 'webhooks/'.$webhook['id']);
+            return;
         }
 
         $client->request('POST', 'webhooks', [
-            'json' => [
-                'url' => $url,
-                'description' => 'Flarum bounce handling',
-                'events' => self::WEBHOOK_EVENTS,
-                'type' => 'transactional',
-            ],
+            'json' => $configuration + ['description' => 'Flarum bounce handling', 'type' => 'transactional'],
         ]);
     }
 
@@ -110,7 +122,18 @@ class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhook
         $client = $this->apiClient($settings);
 
         foreach ($this->webhooksFor($client, $url) as $webhook) {
-            $client->request('DELETE', 'webhooks/'.$webhook['id']);
+            $this->deleteWebhook($client, $webhook['id']);
+        }
+    }
+
+    protected function deleteWebhook(Client $client, int $id): void
+    {
+        try {
+            $client->request('DELETE', 'webhooks/'.$id);
+        } catch (ClientException $e) {
+            if ($e->getResponse()->getStatusCode() !== 404) {
+                throw $e;
+            }
         }
     }
 
@@ -139,6 +162,9 @@ class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhook
     {
         return new Client([
             'base_uri' => 'https://api.brevo.com/v3/',
+            // Bound admin requests when the provider is unavailable.
+            'connect_timeout' => 5,
+            'timeout' => 15,
             'headers' => [
                 'api-key' => $settings->get('mail_brevo_api_key'),
                 'accept' => 'application/json',

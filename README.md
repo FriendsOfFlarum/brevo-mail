@@ -4,6 +4,8 @@
 
 A [Flarum](https://flarum.org) extension. Send your forum's email through the [Brevo](https://www.brevo.com) (formerly Sendinblue) transactional email API.
 
+Requires Flarum 2.1 or later.
+
 ### Setup
 
 1. In Brevo, authenticate your sending domain (or verify the sender address you'll use) under **Senders, Domains & Dedicated IPs**.
@@ -13,9 +15,13 @@ A [Flarum](https://flarum.org) extension. Send your forum's email through the [B
 
 ### Bounces and spam complaints
 
-On Flarum 2.1 and later, Brevo can tell your forum when an address hard bounces, is invalid or blocked, or marks your mail as spam. Flarum then flags the member and can stop sending them notification emails. Soft bounces are ignored.
+Brevo can tell your forum when an address hard bounces, is invalid, or marks your mail as spam. Flarum then flags the member and can stop sending them notification emails. Soft bounces, account errors and provider blocklist events leave the member's flag unchanged.
 
-On the **Email** page, click **Register webhook with provider** under Bounce Handling. The extension adds a transactional webhook to your Brevo account, alongside any you already have. Brevo's requests are checked against Brevo's published IP ranges, which Flarum reads from the connection. If your forum is behind a proxy or CDN, your web server must pass the visitor's real IP address to PHP, for example with Apache's `mod_remoteip` or nginx's `real_ip` module. Flarum logs every webhook it refuses, so check the forum's log if bounces don't arrive.
+1. On the **Email** page, set a **Webhook username** without colons and a strong **Webhook password**, then save. These credentials authenticate callbacks for this forum's Brevo account, including when the forum is behind a proxy or CDN.
+2. Click **Register webhook with provider** under Bounce Handling. The extension creates or updates this forum's transactional webhook, selects hard bounce, invalid-address and spam events, and disables batching. Webhooks for other applications are preserved.
+3. If you change the webhook credentials later, save and click **Register webhook with provider** again.
+
+Flarum logs sampled refusal warnings. Check the forum's log if events do not arrive. Notification suppression is off by default; enable **Stop emailing bounced addresses** if you want flagged members skipped.
 
 ### Already sending through Brevo over SMTP?
 
