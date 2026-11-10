@@ -18,7 +18,7 @@ Requires Flarum 2.1 or later.
 Brevo can tell your forum when an address hard bounces, is invalid, or marks your mail as spam. Flarum then flags the member and can stop sending them notification emails. Soft bounces, account errors and provider blocklist events leave the member's flag unchanged.
 
 1. On the **Email** page, set a **Webhook username** without colons and a strong **Webhook password**, then save. These credentials authenticate callbacks for this forum's Brevo account, including when the forum is behind a proxy or CDN.
-2. Click **Register webhook with provider** under Bounce Handling. The extension creates or updates this forum's transactional webhook, selects hard bounce, invalid-address and spam events, and disables batching. Webhooks for other applications are preserved.
+2. Click **Register webhook with provider** under Bounce Handling. The extension creates or updates this forum's transactional webhook, selects hard bounce, invalid-address and spam events, and disables batching. It registers a credential-free URL and configures the Basic Authorization header separately, so symbols in the password are preserved. Webhooks for other applications are preserved.
 3. If you change the webhook credentials later, save and click **Register webhook with provider** again.
 
 Flarum logs sampled refusal warnings. Check the forum's log if events do not arrive. Notification suppression is off by default; enable **Stop emailing bounced addresses** if you want flagged members skipped.

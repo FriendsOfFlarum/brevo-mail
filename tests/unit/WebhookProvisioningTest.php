@@ -70,6 +70,29 @@ class WebhookProvisioningTest extends TestCase
     }
 
     #[Test]
+    public function percent_credentials_use_an_authorization_header_on_create_and_update(): void
+    {
+        $username = 'forum%user';
+        $password = 'pass%40@:/# word';
+        $endpoint = 'https://forum.example:8443/community/mail/webhook/brevo?source=mail';
+        $url = 'https://'.rawurlencode($username).':'.rawurlencode($password).'@'.substr($endpoint, 8);
+        $settings = m::mock(SettingsRepositoryInterface::class);
+        $values = ['mail_webhook_username' => $username, 'mail_webhook_password' => $password];
+        $settings->shouldReceive('get')->andReturnUsing(fn ($key) => $values[$key] ?? null);
+        $driver = $this->driver($this->hooks(), new Response(201), $this->hooks(['id' => 1, 'url' => $endpoint]), new Response(204));
+
+        $driver->registerWebhook($settings, $url);
+        $driver->registerWebhook($settings, $url);
+
+        $this->assertSame(['GET /v3/webhooks', 'POST /v3/webhooks', 'GET /v3/webhooks', 'PUT /v3/webhooks/1'], $this->requests());
+        foreach ([1, 3] as $index) {
+            $payload = json_decode((string) $this->history[$index]['request']->getBody(), true);
+            $this->assertSame($endpoint, $payload['url']);
+            $this->assertSame([['key' => 'Authorization', 'value' => 'Basic '.base64_encode($username.':'.$password)]], $payload['headers']);
+        }
+    }
+
+    #[Test]
     public function creating_a_hook_keeps_other_applications_and_disables_batching(): void
     {
         $driver = $this->driver($this->hooks(['id' => 9, 'url' => self::OTHER]), new Response(201));
@@ -77,7 +100,8 @@ class WebhookProvisioningTest extends TestCase
         $this->assertSame(['GET /v3/webhooks', 'POST /v3/webhooks'], $this->requests());
         $this->assertSame('type=transactional', $this->history[0]['request']->getUri()->getQuery());
         $payload = json_decode((string) $this->history[1]['request']->getBody(), true);
-        $this->assertSame(self::URL, $payload['url']);
+        $this->assertSame('https://forum.example/mail/webhook/brevo', $payload['url']);
+        $this->assertSame([['key' => 'Authorization', 'value' => 'Basic '.base64_encode('forum:secret')]], $payload['headers']);
         $this->assertSame(['hardBounce', 'invalid', 'spam'], $payload['events']);
         $this->assertFalse($payload['batched']);
         $this->assertSame('transactional', $payload['type']);
@@ -132,7 +156,12 @@ class WebhookProvisioningTest extends TestCase
         $this->assertSame(['GET /v3/webhooks', 'PUT /v3/webhooks/1', 'GET /v3/webhooks', 'PUT /v3/webhooks/1'], $this->requests());
         $this->assertSame('type=transactional', $this->history[0]['request']->getUri()->getQuery());
         $payload = json_decode((string) $this->history[1]['request']->getBody(), true);
-        $this->assertSame(['url' => self::URL, 'events' => ['hardBounce', 'invalid', 'spam'], 'batched' => false], $payload);
+        $this->assertSame([
+            'url' => 'https://forum.example/mail/webhook/brevo',
+            'events' => ['hardBounce', 'invalid', 'spam'],
+            'batched' => false,
+            'headers' => [['key' => 'Authorization', 'value' => 'Basic '.base64_encode('forum:secret')]],
+        ], $payload);
     }
 
     #[Test]

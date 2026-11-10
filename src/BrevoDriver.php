@@ -17,6 +17,7 @@ use Flarum\Mail\ProvisionsWebhooks;
 use Flarum\Settings\SettingsRepositoryInterface;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
+use GuzzleHttp\Psr7\Uri;
 use Illuminate\Contracts\Validation\Factory;
 use Illuminate\Support\MessageBag;
 use RuntimeException;
@@ -100,7 +101,13 @@ class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhook
 
         $client = $this->apiClient($settings);
         $webhooks = $this->webhooksFor($client, $url);
-        $configuration = ['url' => $url, 'events' => self::WEBHOOK_EVENTS, 'batched' => false];
+        $configuration = [
+            'url' => (string) (new Uri($url))->withUserInfo(''),
+            'events' => self::WEBHOOK_EVENTS,
+            'batched' => false,
+            // Keep special characters out of Brevo's notify-URL validation.
+            'headers' => [['key' => 'Authorization', 'value' => 'Basic '.base64_encode($this->getWebhookSigningSecret($settings))]],
+        ];
 
         if ($webhooks !== []) {
             $first = array_shift($webhooks);
