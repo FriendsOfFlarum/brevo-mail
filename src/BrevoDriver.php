@@ -146,7 +146,17 @@ class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhook
     {
         $endpoint = fn (string $url) => preg_replace('#^([a-z][a-z0-9+.-]*://)[^/@]*@#i', '$1', $url);
 
-        $response = $client->request('GET', 'webhooks', ['query' => ['type' => 'transactional']]);
+        try {
+            $response = $client->request('GET', 'webhooks', ['query' => ['type' => 'transactional']]);
+        } catch (ClientException $e) {
+            $response = $e->getResponse();
+            // Brevo reports an empty collection as 400 rather than an empty list.
+            if ($response->getStatusCode() === 400 && (json_decode((string) $response->getBody(), true)['code'] ?? null) === 'document_not_found') {
+                return [];
+            }
+
+            throw $e;
+        }
         $found = [];
 
         foreach (json_decode((string) $response->getBody(), true)['webhooks'] ?? [] as $webhook) {

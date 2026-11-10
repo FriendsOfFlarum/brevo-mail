@@ -15,6 +15,7 @@ use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\Testing\unit\TestCase;
 use FoF\BrevoMail\BrevoDriver;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\ServerException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
@@ -80,6 +81,45 @@ class WebhookProvisioningTest extends TestCase
         $this->assertSame(['hardBounce', 'invalid', 'spam'], $payload['events']);
         $this->assertFalse($payload['batched']);
         $this->assertSame('transactional', $payload['type']);
+    }
+
+    #[Test]
+    public function registration_creates_the_first_hook_when_brevo_reports_no_records(): void
+    {
+        $driver = $this->driver(
+            new Response(400, [], '{"code":"document_not_found","message":"Webhook record does not exist"}'),
+            new Response(201)
+        );
+        $driver->registerWebhook($this->settings(), self::URL);
+        $this->assertSame(['GET /v3/webhooks', 'POST /v3/webhooks'], $this->requests());
+    }
+
+    #[Test]
+    public function unregistering_with_no_records_is_harmless(): void
+    {
+        $driver = $this->driver(new Response(400, [], '{"code":"document_not_found","message":"Webhook record does not exist"}'));
+        $driver->unregisterWebhook($this->settings(), self::URL);
+        $this->assertSame(['GET /v3/webhooks'], $this->requests());
+    }
+
+    #[Test]
+    public function other_listing_errors_do_not_create_a_hook(): void
+    {
+        foreach ([
+            new Response(400, [], '{"code":"invalid_parameter"}'),
+            new Response(401, [], '{"code":"document_not_found"}'),
+            new Response(404, [], '{"code":"document_not_found"}'),
+            new Response(400, [], 'not json'),
+        ] as $response) {
+            $this->history = [];
+            try {
+                $this->driver($response)->registerWebhook($this->settings(), self::URL);
+                $this->fail('The provider error must reach the caller.');
+            } catch (ClientException $e) {
+                $this->assertSame($response, $e->getResponse());
+                $this->assertSame(['GET /v3/webhooks'], $this->requests());
+            }
+        }
     }
 
     #[Test]
