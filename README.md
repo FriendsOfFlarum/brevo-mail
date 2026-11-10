@@ -4,12 +4,24 @@
 
 A [Flarum](https://flarum.org) extension. Send your forum's email through the [Brevo](https://www.brevo.com) (formerly Sendinblue) transactional email API.
 
+Requires Flarum 2.1 or later.
+
 ### Setup
 
 1. In Brevo, authenticate your sending domain (or verify the sender address you'll use) under **Senders, Domains & Dedicated IPs**.
 2. Create an API key under **SMTP & API → API keys**. Use an API key (it starts with `xkeysib-`), not an SMTP key.
 3. In your forum's admin panel, open **Email**, choose `brevo` as the driver, paste the API key, and save.
 4. Make sure the **From** address matches a verified sender or authenticated domain, then use **Send Test Mail** to check everything works.
+
+### Bounces and spam complaints
+
+Brevo can tell your forum when an address hard bounces, is invalid, or marks your mail as spam. Flarum then flags the member and can stop sending them notification emails. Soft bounces, account errors and provider blocklist events leave the member's flag unchanged.
+
+1. On the **Email** page, set a **Webhook username** without colons and a strong **Webhook password**, then save. These credentials authenticate callbacks for this forum's Brevo account, including when the forum is behind a proxy or CDN.
+2. Click **Register webhook with provider** under Bounce Handling. The extension creates or updates this forum's transactional webhook, selects hard bounce, invalid-address and spam events, and disables batching. It registers a credential-free URL and configures the Basic Authorization header separately, so symbols in the password are preserved. Webhooks for other applications are preserved.
+3. If you change the webhook credentials later, save and click **Register webhook with provider** again.
+
+Flarum logs sampled refusal warnings. Check the forum's log if events do not arrive. Notification suppression is off by default; enable **Stop emailing bounced addresses** if you want flagged members skipped.
 
 ### Already sending through Brevo over SMTP?
 
