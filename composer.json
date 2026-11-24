@@ -87,8 +87,8 @@
         "analyse:phpstan": "Run static analysis"
     },
     "require-dev": {
-        "flarum/testing": "^2.0",
-        "flarum/phpstan": "^2.0"
+        "flarum/testing": "2.x-dev",
+        "flarum/phpstan": "2.x-dev"
     },
     "minimum-stability": "beta",
     "prefer-stable": true

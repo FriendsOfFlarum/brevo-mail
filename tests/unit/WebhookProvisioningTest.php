@@ -45,14 +45,14 @@ class WebhookProvisioningTest extends TestCase
 
             protected function apiClient(SettingsRepositoryInterface $settings): Client
             {
-                return new Client(['handler' => $this->stack, 'base_uri' => 'https://api.brevo.com/v3/']);
+                return new Client(['handler' => $this->stack] + parent::apiClient($settings)->getConfig());
             }
         };
     }
 
     private function settings(bool $configured = true): SettingsRepositoryInterface
     {
-        $values = ['mail_webhook_username' => 'forum', 'mail_webhook_password' => $configured ? 'secret' : ''];
+        $values = ['mail_brevo_api_key' => 'xkeysib-test', 'mail_webhook_username' => 'forum', 'mail_webhook_password' => $configured ? 'secret' : ''];
         $settings = m::mock(SettingsRepositoryInterface::class);
         $settings->shouldReceive('get')->andReturnUsing(fn ($key) => $values[$key] ?? null);
 
@@ -99,6 +99,10 @@ class WebhookProvisioningTest extends TestCase
         $driver->registerWebhook($this->settings(), self::URL);
         $this->assertSame(['GET /v3/webhooks', 'POST /v3/webhooks'], $this->requests());
         $this->assertSame('type=transactional', $this->history[0]['request']->getUri()->getQuery());
+        $this->assertSame('api.brevo.com', $this->history[0]['request']->getUri()->getHost());
+        $this->assertSame('xkeysib-test', $this->history[0]['request']->getHeaderLine('api-key'));
+        $this->assertSame(15, $this->history[0]['options']['timeout']);
+        $this->assertSame(5, $this->history[0]['options']['connect_timeout']);
         $payload = json_decode((string) $this->history[1]['request']->getBody(), true);
         $this->assertSame('https://forum.example/mail/webhook/brevo', $payload['url']);
         $this->assertSame([['key' => 'Authorization', 'value' => 'Basic '.base64_encode('forum:secret')]], $payload['headers']);
@@ -147,6 +151,46 @@ class WebhookProvisioningTest extends TestCase
     }
 
     #[Test]
+    public function lookup_does_not_confuse_query_addresses_with_credentials_and_normalizes_the_host(): void
+    {
+        $driver = $this->driver($this->hooks(
+            ['id' => 9, 'url' => 'https://other.example?notify=person@forum.example/mail/webhook/brevo'],
+            ['id' => 10, 'url' => 'https://broken.example:abc/'],
+            ['id' => 1, 'url' => 'https://FORUM.EXAMPLE:443/mail/webhook/brevo']
+        ), new Response(204));
+        $driver->registerWebhook($this->settings(), self::URL);
+        $this->assertSame(['GET /v3/webhooks', 'PUT /v3/webhooks/1'], $this->requests());
+    }
+
+    #[Test]
+    public function updating_credentials_preserves_proxy_headers(): void
+    {
+        $driver = $this->driver($this->hooks(['id' => 1, 'url' => self::OLD, 'headers' => [
+            ['key' => 'CF-Access-Client-Id', 'value' => 'proxy-id'],
+            ['key' => 'authorization', 'value' => 'Basic old'],
+            ['key' => 'CF-Access-Client-Secret', 'value' => 'proxy-secret'],
+        ]]), new Response(204));
+        $driver->registerWebhook($this->settings(), self::URL);
+        $payload = json_decode((string) $this->history[1]['request']->getBody(), true);
+        $this->assertSame([
+            ['key' => 'CF-Access-Client-Id', 'value' => 'proxy-id'],
+            ['key' => 'CF-Access-Client-Secret', 'value' => 'proxy-secret'],
+            ['key' => 'Authorization', 'value' => 'Basic '.base64_encode('forum:secret')],
+        ], $payload['headers']);
+    }
+
+    #[Test]
+    public function credential_bearing_ipv6_urls_can_be_registered_and_removed(): void
+    {
+        $endpoint = 'https://[2001:db8::1]/mail/webhook/brevo';
+        $url = 'https://forum:secret@[2001:db8::1]/mail/webhook/brevo';
+        $driver = $this->driver($this->hooks(), new Response(201), $this->hooks(['id' => 1, 'url' => $endpoint]), new Response(204));
+        $driver->registerWebhook($this->settings(), $url);
+        $driver->unregisterWebhook($this->settings(), $url);
+        $this->assertSame(['GET /v3/webhooks', 'POST /v3/webhooks', 'GET /v3/webhooks', 'DELETE /v3/webhooks/1'], $this->requests());
+    }
+
+    #[Test]
     public function an_existing_hook_gets_current_credentials_subscriptions_and_format(): void
     {
         $hooks = [['id' => 9, 'url' => self::OTHER], ['id' => 1, 'url' => self::OLD, 'events' => ['delivered'], 'batched' => true]];
@@ -177,6 +221,35 @@ class WebhookProvisioningTest extends TestCase
     }
 
     #[Test]
+    public function deduplicating_keeps_proxy_headers_from_an_older_working_hook(): void
+    {
+        $driver = $this->driver($this->hooks(
+            ['id' => 2, 'url' => self::URL],
+            ['id' => 1, 'url' => self::OLD, 'headers' => [['key' => 'CF-Access-Client-Secret', 'value' => 'working-secret']]]
+        ), new Response(204), new Response(204));
+        $driver->registerWebhook($this->settings(), self::URL);
+        $payload = json_decode((string) $this->history[1]['request']->getBody(), true);
+        $this->assertSame('working-secret', $payload['headers'][0]['value']);
+        $this->assertSame(['GET /v3/webhooks', 'PUT /v3/webhooks/2', 'DELETE /v3/webhooks/1'], $this->requests());
+    }
+
+    #[Test]
+    public function conflicting_proxy_headers_refuse_deduplication_without_mutations(): void
+    {
+        $driver = $this->driver($this->hooks(
+            ['id' => 1, 'url' => self::OLD, 'headers' => [['key' => 'CF-Access-Client-Secret', 'value' => 'first']]],
+            ['id' => 2, 'url' => self::URL, 'headers' => [['key' => 'cf-access-client-secret', 'value' => 'second']]]
+        ));
+        try {
+            $driver->registerWebhook($this->settings(), self::URL);
+            $this->fail('Conflicting proxy credentials must not be overwritten.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('conflicting headers', $e->getMessage());
+            $this->assertSame(['GET /v3/webhooks'], $this->requests());
+        }
+    }
+
+    #[Test]
     public function duplicates_are_removed_only_after_the_primary_hook_is_updated(): void
     {
         $driver = $this->driver($this->hooks(['id' => 1, 'url' => self::OLD], ['id' => 2, 'url' => self::URL]), new Response(204), new Response(204));
@@ -199,6 +272,14 @@ class WebhookProvisioningTest extends TestCase
         $driver = $this->driver($this->hooks(['id' => 1, 'url' => self::OLD]), new Response(404));
         $driver->unregisterWebhook($this->settings(), self::URL);
         $this->assertSame(['GET /v3/webhooks', 'DELETE /v3/webhooks/1'], $this->requests());
+    }
+
+    #[Test]
+    public function plaintext_callback_urls_refuse_registration_before_an_api_call(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('HTTPS');
+        $this->driver()->registerWebhook($this->settings(), 'http://forum.example/mail/webhook/brevo');
     }
 
     #[Test]

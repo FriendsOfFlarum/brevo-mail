@@ -17,7 +17,7 @@ use Flarum\Mail\ProvisionsWebhooks;
 use Flarum\Settings\SettingsRepositoryInterface;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
-use GuzzleHttp\Psr7\Uri;
+use Laminas\Diactoros\Uri;
 use Illuminate\Contracts\Validation\Factory;
 use Illuminate\Support\MessageBag;
 use RuntimeException;
@@ -99,18 +99,38 @@ class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhook
             throw new RuntimeException('Configure webhook authentication before registering the webhook.');
         }
 
+        $endpoint = (new Uri($url))->withUserInfo('');
+        if ($endpoint->getScheme() !== 'https') {
+            throw new RuntimeException('Webhook authentication requires an HTTPS callback URL.');
+        }
+
         $client = $this->apiClient($settings);
         $webhooks = $this->webhooksFor($client, $url);
+        $authorization = ['key' => 'Authorization', 'value' => 'Basic '.base64_encode($this->getWebhookSigningSecret($settings))];
         $configuration = [
-            'url' => (string) (new Uri($url))->withUserInfo(''),
+            'url' => (string) $endpoint,
             'events' => self::WEBHOOK_EVENTS,
             'batched' => false,
             // Keep special characters out of Brevo's notify-URL validation.
-            'headers' => [['key' => 'Authorization', 'value' => 'Basic '.base64_encode($this->getWebhookSigningSecret($settings))]],
+            'headers' => [$authorization],
         ];
 
         if ($webhooks !== []) {
             $first = array_shift($webhooks);
+            $headers = [];
+            foreach ([$first, ...$webhooks] as $webhook) {
+                foreach ($webhook['headers'] as $header) {
+                    $key = strtolower($header['key']);
+                    if ($key === 'authorization') {
+                        continue;
+                    }
+                    if (isset($headers[$key]) && $headers[$key]['value'] !== $header['value']) {
+                        throw new RuntimeException('Existing webhooks have conflicting headers. Reconcile them in Brevo before registering again.');
+                    }
+                    $headers[$key] = $header;
+                }
+            }
+            $configuration['headers'] = [...array_values($headers), $authorization];
             $client->request('PUT', 'webhooks/'.$first['id'], ['json' => $configuration]);
             foreach ($webhooks as $webhook) {
                 $this->deleteWebhook($client, $webhook['id']);
@@ -145,13 +165,13 @@ class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhook
     }
 
     /**
-     * The transactional webhooks sending to this forum, whatever credentials their URLs carry.
+     * Ignore credentials so rotating them does not create a second hook.
      *
-     * @return list<array{id: int, url: string}>
+     * @return list<array{id: int, url: string, headers: list<array{key: string, value: string}>}>
      */
     protected function webhooksFor(Client $client, string $url): array
     {
-        $endpoint = fn (string $url) => preg_replace('#^([a-z][a-z0-9+.-]*://)[^/@]*@#i', '$1', $url);
+        $endpoint = fn (string $url) => (string) (new Uri($url))->withUserInfo('');
 
         try {
             $response = $client->request('GET', 'webhooks', ['query' => ['type' => 'transactional']]);
@@ -165,10 +185,16 @@ class BrevoDriver implements DriverInterface, HandlesWebhooks, ProvisionsWebhook
             throw $e;
         }
         $found = [];
+        $expected = $endpoint($url);
 
         foreach (json_decode((string) $response->getBody(), true)['webhooks'] ?? [] as $webhook) {
-            if ($endpoint((string) ($webhook['url'] ?? '')) === $endpoint($url)) {
-                $found[] = ['id' => (int) $webhook['id'], 'url' => (string) $webhook['url']];
+            try {
+                $matches = $endpoint((string) ($webhook['url'] ?? '')) === $expected;
+            } catch (\InvalidArgumentException) {
+                continue;
+            }
+            if ($matches) {
+                $found[] = ['id' => (int) $webhook['id'], 'url' => (string) $webhook['url'], 'headers' => $webhook['headers'] ?? []];
             }
         }
 
